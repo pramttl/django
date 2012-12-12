@@ -103,7 +103,7 @@ class Query(object):
 
     def __init__(self, model, where=WhereNode):
         self.model = model
-        self.alias_refcount = SortedDict()
+        self.alias_refcount = {}
         # alias_map is the most important data structure regarding joins.
         # It's used for recording which joins exist in the query and what
         # type they are. The key is the alias of the joined table (possibly
@@ -599,17 +599,22 @@ class Query(object):
             for name in parts[:-1]:
                 old_model = cur_model
                 source = opts.get_field_by_name(name)[0]
-                cur_model = source.rel.to
+                if is_reverse_o2o(source):
+                    cur_model = source.model
+                else:
+                    cur_model = source.rel.to
                 opts = cur_model._meta
                 # Even if we're "just passing through" this model, we must add
                 # both the current model's pk and the related reference field
-                # to the things we select.
-                must_include[old_model].add(source)
+                # (if it's not a reverse relation) to the things we select.
+                if not is_reverse_o2o(source):
+                    must_include[old_model].add(source)
                 add_to_dict(must_include, cur_model, opts.pk)
             field, model, _, _ = opts.get_field_by_name(parts[-1])
             if model is None:
                 model = cur_model
-            add_to_dict(seen, model, field)
+            if not is_reverse_o2o(field):
+                add_to_dict(seen, model, field)
 
         if defer:
             # We need to load all fields for each model, except those that
@@ -860,7 +865,7 @@ class Query(object):
         count. Note that after execution, the reference counts are zeroed, so
         tables added in compiler will not be seen by this method.
         """
-        return len([1 for count in six.itervalues(self.alias_refcount) if count])
+        return len([1 for count in self.alias_refcount.values() if count])
 
     def join(self, connection, reuse=REUSE_ALL, promote=False,
              outer_if_first=False, nullable=False):
@@ -1096,7 +1101,7 @@ class Query(object):
             value = value()
         elif isinstance(value, ExpressionNode):
             # If value is a query expression, evaluate it
-            value = SQLEvaluator(value, self)
+            value = SQLEvaluator(value, self, reuse=can_reuse)
             having_clause = value.contains_aggregate
 
         for alias, aggregate in self.aggregates.items():
@@ -1274,11 +1279,17 @@ class Query(object):
         Compute the necessary table joins for the passage through the fields
         given in 'names'. 'opts' is the Options class for the current model
         (which gives the table we are joining to), 'alias' is the alias for the
-        table we are joining to. If dupe_multis is True, any many-to-many or
-        many-to-one joins will always create a new alias (necessary for
-        disjunctive filters). If can_reuse is not None, it's a list of aliases
-        that can be reused in these joins (nothing else can be reused in this
-        case). Finally, 'negate' is used in the same sense as for add_filter()
+        table we are joining to.
+
+        The 'can_reuse' defines the reverse foreign key joins we can reuse. It
+        can be either sql.constants.REUSE_ALL in which case all joins are
+        reusable or a set of aliases that can be reused. Non-reverse foreign
+        keys are always reusable.
+
+        The 'allow_explicit_fk' controls if field.attname is allowed in the
+        lookups.
+
+        Finally, 'negate' is used in the same sense as for add_filter()
         -- it indicates an exclude() filter, or something similar. It is only
         passed in here so that it can be passed to a field's extra_filter() for
         customized behavior.
@@ -1532,9 +1543,9 @@ class Query(object):
         # comparison to NULL (e.g. in
         # Tag.objects.exclude(parent__parent__name='t1'), a tag with no parent
         # would otherwise be overlooked).
-        active_positions = [pos for (pos, count) in
-                enumerate(six.itervalues(query.alias_refcount)) if count]
-        if active_positions[-1] > 1:
+        active_positions = len([count for count
+                                in query.alias_refcount.items() if count])
+        if active_positions > 1:
             self.add_filter(('%s__isnull' % prefix, False), negate=True,
                     trim=True, can_reuse=can_reuse)
 
@@ -1977,3 +1988,10 @@ def add_to_dict(data, key, value):
         data[key].add(value)
     else:
         data[key] = set([value])
+
+def is_reverse_o2o(field):
+    """
+    A little helper to check if the given field is reverse-o2o. The field is
+    expected to be some sort of relation field or related object.
+    """
+    return not hasattr(field, 'rel') and field.field.unique

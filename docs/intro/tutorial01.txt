@@ -52,7 +52,7 @@ code, then run the following command:
 
    django-admin.py startproject mysite
 
-This will create a ``mysite`` directory in your current directory.  If it didn't 
+This will create a ``mysite`` directory in your current directory. If it didn't
 work, see :doc:`Troubleshooting </faq/troubleshooting>`.
 
 .. admonition:: Script name may differ in distribution packages
@@ -220,8 +220,8 @@ your database connection settings.
   SQLite).
 
 * :setting:`HOST` -- The host your database is on. Leave this as
-  an empty string if your database server is on the same physical
-  machine (not used for SQLite).
+  an empty string (or possibly ``127.0.0.1``) if your database server is on the
+  same physical machine (not used for SQLite). See :setting:`HOST` for details.
 
 If you're new to databases, we recommend simply using SQLite by setting
 :setting:`ENGINE` to ``'django.db.backends.sqlite3'`` and :setting:`NAME` to
@@ -666,6 +666,7 @@ Save these changes and start a new Python interactive shell by running
     >>> Poll.objects.get(pub_date__year=2012)
     <Poll: What's up?>
 
+    # Request an ID that doesn't exist, this will raise an exception.
     >>> Poll.objects.get(id=2)
     Traceback (most recent call last):
         ...
